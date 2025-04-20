@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debate AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="sidebar">
+        <button class="resetBtn" id="resetBtn">Reset Chat History</button>
+        <div id="chat"></div>
+    </div>
+
+    <div class="main">
+            <button id="recordBtn">Record Speech</button>
+            <button id="sendBtn">Send to AI</button>
+            <p id="loadingMsg" style="display: none;"></p>
+        <audio id="audioPlayback" controls style="display: none;"></audio>
+    </div>
+
+    <script>
+        const chat = document.getElementById("chat");
+        const recordBtn = document.getElementById("recordBtn");
+        const audioPlayback = document.getElementById("audioPlayback");
+        const sendBtn = document.getElementById("sendBtn");
+        const resetBtn = document.getElementById("resetBtn");
+        const loadingMsg = document.getElementById("loadingMsg");
+        sendBtn.disabled = true;
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        function addMessage(role, text) {
+            const msg = document.createElement("div");
+            msg.className = "message " + role;
+            msg.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${text}`;
+            chat.appendChild(msg);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        async function refreshContext() {
+            chat.innerHTML = "";
+            const response = await fetch("/get-context");
+            const history = await response.json();
+            
+            console.log(history);
+            history.forEach(message => {
+                if (message.role !== "system") 
+                {
+                    addMessage(message.role, message.content);
+                }
+            });
+        }
+
+        recordBtn.addEventListener("click", async () => {
+            if (!isRecording) {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    audioPlayback.src = audioUrl;
+                    audioPlayback.style.display = "block";
+                    console.log("Recording done")
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'recording.webm')
+                    loadingMsg.innerText = "Transcribing..."
+                    loadingMsg.style.display = "block";
+                    const response = await fetch('/upload-user-speech', {
+                        method: "POST",
+                        body: formData,
+                    });
+
+                    if (response.ok) {
+                        const userText = await response.text();
+                        refreshContext();
+                        sendBtn.disabled = false;
+                    }
+                    loadingMsg.style.display = "none"
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordBtn.textContent = "⏹ Stop Recording";
+            } else {
+                mediaRecorder.stop();
+                isRecording = false;
+                recordBtn.textContent = "Record Speech";
+            }
+        });
+
+        sendBtn.addEventListener("click", async () => {
+            sendBtn.disabled = true;
+            loadingMsg.innerText = "AI is thinking..."
+            loadingMsg.style.display = "block";
+            const response = await fetch('/ask-ai', {
+                method: "GET"
+            });
+            const aiData = await response.json()
+            if (aiData.audio) {
+                const audioData = `data:audio/wav;base64,${aiData.audio}`;
+                const audio = new Audio(audioData);
+                audio.play();
+                console.log("Playing!");
+                if (isRecording) 
+                {
+                    audio.stop();
+                }
+            }
+            loadingMsg.style.display = "none"
+            refreshContext();
+        });
+
+        resetBtn.addEventListener("click", async () => {
+            const response = await fetch("/reset-context")
+            refreshContext();
+        })
+
+        document.onload = refreshContext();
+
+    </script>
+</body>
+</html>
